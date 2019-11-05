@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -30,29 +31,18 @@ func main() {
 	params := s3.ListObjectVersionsInput{Bucket: aws.String(bucket)}
 	err = svc.ListObjectVersionsPages(&params,
 		func(page *s3.ListObjectVersionsOutput, lastPage bool) bool {
-
+			var wg sync.WaitGroup
 			for _, v := range page.Versions {
 				i := s3.DeleteObjectTaggingInput{Bucket: aws.String(bucket), Key: v.Key, VersionId: v.VersionId}
-				_, err := svc.DeleteObjectTagging(&i)
+				wg.Add(1)
+				go deleteTags(svc, &i, &wg)
 				count = count + 1
 				if count%10000 == 0 {
-					fmt.Printf("deleted\t %d  objects", count)
+					fmt.Fprintf(os.Stderr, "deleted %d objects\n", count)
 				}
-				if err != nil {
-					if aerr, ok := err.(awserr.Error); ok {
-						switch aerr.Code() {
-						default:
-							fmt.Println(aerr.Error())
-						}
-					} else {
-						// Print the error, cast err to awserr.Error to get the Code and
-						// Message from an error.
-						fmt.Println(err.Error())
-					}
-				}
-
 			}
-			return false
+			wg.Wait()
+			return true
 		})
 
 	if err != nil {
@@ -61,6 +51,23 @@ func main() {
 
 }
 
+func deleteTags(svc *s3.S3, i *s3.DeleteObjectTaggingInput, wg *sync.WaitGroup) {
+	defer wg.Done()
+	_, err := svc.DeleteObjectTagging(i)
+
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			switch aerr.Code() {
+			default:
+				fmt.Println(aerr.Error())
+			}
+		} else {
+			// Print the error, cast err to awserr.Error to get the Code and
+			// Message from an error.
+			fmt.Println(err.Error())
+		}
+	}
+}
 func exitErrorf(msg string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, msg+"\n", args...)
 	os.Exit(1)
